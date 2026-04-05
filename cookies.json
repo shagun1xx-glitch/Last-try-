@@ -1,0 +1,32 @@
+[
+  {
+    "name": "_fbp",
+    "value": "fb.1.1774379425738.464538269920154920",
+    "domain": ".ivasms.com",
+    "path": "/",
+    "expires": "2026-06-22T19:42:32.000Z",
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "ivas_sms_session",
+    "value": "eyJpdiI6InpVUWhNZnJVbUpmU1UvZnhsNnV4R0E9PSIsInZhbHVlIjoidThJY2lmVk8xU3crdm1JakdPU3JHOG9TcjFrTW4zZTdlNnVZZGJmRE5vNUtVNytKUzJTd2dJR1RKT2xTSHV3Mk4yZjV0M0JFdUNqTmdOdVNPNSs2MzdFYm9TeXBnVHR2UDMvSE83UlRCeUYzUXM0cUU4QVY0ODBwWFdCejM4anIiLCJtYWMiOiI2ODFkZTNmMWZiNTc3MzA1MWQ0YmQxOThmN2Y1ZGIwZWRkZGZhMjllMWFjMDIwN2Q0OTRhMjM2ZTM0NmI3NzRjIiwidGFnIjoiIn0%3D",
+    "domain": "www.ivasms.com",
+    "path": "/",
+    "expires": "2026-03-24T21:42:37.660Z",
+    "httpOnly": true,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "XSRF-TOKEN",
+    "value": "eyJpdiI6ImhJdHpDSzhyaTBxNDh2T2M1dTNtMnc9PSIsInZhbHVlIjoibWw4NXh3SEhxYTRXVGJXOFFQemd1L2orZHY1dWN4T3Bid3J3cjBxa1Jwa2ZBYzRDYjBObnl1YUlVSlNIK1I1RFRzM2ZjTGJSY0ZVOGpaK2FHZm5BOHlOb2hLQjRIa3QrWHQ0WC80YVN4NVhjT1d6MWRFUzh6N1o1dVlBT0Y2STUiLCJtYWMiOiIzZmZmYjQ2MmM2NTYxYmYwYjdjN2RiODA2ZGUyZGIzYzYwZmQyOWRlZDQ1MzI5OTRjNzI4ODA1NjhmZGQ1ZDBmIiwidGFnIjoiIn0%3D",
+    "domain": "www.ivasms.com",
+    "path": "/",
+    "expires": "2026-03-24T21:42:37.659Z",
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  }
+]
