@@ -28,11 +28,11 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-BOT_TOKEN     = "8678706957:AAGxaNWrM6XLm0jk3-ULBrm4Fbx4AprTdNg"
-IVAS_EMAIL    = "tawandamahachi07@gmail.com"
-IVAS_PASSWORD = "mahachi2007"
-ADMIN_IDS     = ["8339856952"]
-INITIAL_CHATS = ["-1003854641278"]
+BOT_TOKEN     = "8729407620:AAFj37OrvH03YFHNS_p2KgtFWLIakrNQwNY"
+IVAS_EMAIL    = "shagunkumar060q@gmail.com"
+IVAS_PASSWORD = "Sh@gun1234567890"
+ADMIN_IDS     = ["8544485437"]
+INITIAL_CHATS = ["-1003887159426"]
 
 LOGIN_URL    = "https://www.ivasms.com/login"
 PORTAL_URL   = "https://www.ivasms.com/portal/sms/received"
@@ -50,7 +50,7 @@ DEBUG_HTML   = os.path.join(DATA_DIR, "debug.html")
 POLL_SECS = 30
 
 BUTTONS = InlineKeyboardMarkup([
-    [InlineKeyboardButton("📱 NUMBER CHANNEL", url="https://t.me/mrafrixtech")],
+    [InlineKeyboardButton("📱 NUMBER CHANNEL", url="https://t.me/kitenumber")],
     [InlineKeyboardButton("📡 BACKUP CHANNEL",  url="https://t.me/auroratechinc")],
     [InlineKeyboardButton("🔑 OTP GROUP",        url="https://t.me/afrixotpgc")],
     [InlineKeyboardButton("👨‍💻 CONTACT DEV",     url="https://t.me/jaden_afrix")],
