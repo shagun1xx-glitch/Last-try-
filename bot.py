@@ -14,6 +14,12 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import Conflict, TimedOut, NetworkError, RetryAfter
 
+try:
+    from playwright_stealth import stealth_async
+    STEALTH_AVAILABLE = True
+except ImportError:
+    STEALTH_AVAILABLE = False
+
 logging.basicConfig(
     stream=sys.stdout,
     level=logging.INFO,
@@ -180,40 +186,88 @@ _logged_in    = False
 _fail_count   = 0
 _login_method = "none"
 
-STEALTH_SCRIPT = """
-    Object.defineProperty(navigator, 'webdriver',          {get: () => undefined});
-    Object.defineProperty(navigator, 'plugins',            {get: () => [1,2,3,4,5]});
-    Object.defineProperty(navigator, 'languages',          {get: () => ['en-US','en']});
-    Object.defineProperty(navigator, 'platform',           {get: () => 'Win32'});
-    Object.defineProperty(navigator, 'hardwareConcurrency',{get: () => 8});
-    Object.defineProperty(navigator, 'deviceMemory',       {get: () => 8});
-    Object.defineProperty(navigator, 'maxTouchPoints',     {get: () => 0});
-    Object.defineProperty(navigator, 'vendor',             {get: () => 'Google Inc.'});
-    Object.defineProperty(screen, 'colorDepth',            {get: () => 24});
-    Object.defineProperty(screen, 'pixelDepth',            {get: () => 24});
-    window.chrome = {
-        app: {isInstalled: false},
-        runtime: {
-            connect:     function(){},
-            sendMessage: function(){},
-            onMessage:   {addListener: function(){}, removeListener: function(){}},
-        },
-        loadTimes: function(){ return {}; },
-        csi:       function(){ return {}; },
-    };
-    window.outerHeight = 900;
-    window.outerWidth  = 1440;
-    const origQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (parameters) =>
-        parameters.name === 'notifications'
-            ? Promise.resolve({state: Notification.permission})
-            : origQuery(parameters);
+EXTRA_STEALTH_JS = """
+    (() => {
+        const NOOP = () => {};
+        const RND  = () => Math.floor(Math.random() * 1000);
+
+        Object.defineProperty(navigator, 'webdriver',           {get: () => undefined, configurable: true});
+        Object.defineProperty(navigator, 'plugins',             {get: () => [1,2,3,4,5], configurable: true});
+        Object.defineProperty(navigator, 'languages',           {get: () => ['en-US','en'], configurable: true});
+        Object.defineProperty(navigator, 'platform',            {get: () => 'Win32', configurable: true});
+        Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8, configurable: true});
+        Object.defineProperty(navigator, 'deviceMemory',        {get: () => 8, configurable: true});
+        Object.defineProperty(navigator, 'maxTouchPoints',      {get: () => 0, configurable: true});
+        Object.defineProperty(navigator, 'vendor',              {get: () => 'Google Inc.', configurable: true});
+        Object.defineProperty(navigator, 'appVersion',          {get: () => '5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', configurable: true});
+
+        Object.defineProperty(screen, 'colorDepth',  {get: () => 24, configurable: true});
+        Object.defineProperty(screen, 'pixelDepth',  {get: () => 24, configurable: true});
+        Object.defineProperty(screen, 'width',       {get: () => 1280, configurable: true});
+        Object.defineProperty(screen, 'height',      {get: () => 800, configurable: true});
+        Object.defineProperty(screen, 'availWidth',  {get: () => 1280, configurable: true});
+        Object.defineProperty(screen, 'availHeight', {get: () => 760, configurable: true});
+
+        window.chrome = {
+            app: {isInstalled: false, InstallState: {DISABLED:'a',INSTALLED:'b',NOT_INSTALLED:'c'}, RunningState: {CANNOT_RUN:'a',READY_TO_RUN:'b',RUNNING:'c'}},
+            runtime: {
+                PlatformOs: {MAC:'mac',WIN:'win',ANDROID:'android',CROS:'cros',LINUX:'linux',OPENBSD:'openbsd'},
+                PlatformArch: {ARM:'arm',X86_32:'x86-32',X86_64:'x86-64'},
+                PlatformNaclArch: {ARM:'arm',X86_32:'x86-32',X86_64:'x86-64'},
+                RequestUpdateCheckStatus: {THROTTLED:'throttled',NO_UPDATE:'no_update',UPDATE_AVAILABLE:'update_available'},
+                OnInstalledReason: {INSTALL:'install',UPDATE:'update',CHROME_UPDATE:'chrome_update',SHARED_MODULE_UPDATE:'shared_module_update'},
+                OnRestartRequiredReason: {APP_UPDATE:'app_update',OS_UPDATE:'os_update',PERIODIC:'periodic'},
+                connect:         NOOP,
+                sendMessage:     NOOP,
+                id:              undefined,
+                onMessage:       {addListener: NOOP, removeListener: NOOP},
+                onConnect:       {addListener: NOOP, removeListener: NOOP},
+                onInstalled:     {addListener: NOOP, removeListener: NOOP},
+            },
+            loadTimes:  NOOP,
+            csi:        NOOP,
+        };
+
+        window.outerHeight = 900;
+        window.outerWidth  = 1440;
+        window.innerHeight = 800;
+        window.innerWidth  = 1280;
+        window.screenX    = 0;
+        window.screenY    = 0;
+
+        try {
+            const origQuery = window.navigator.permissions.query.bind(window.navigator.permissions);
+            window.navigator.permissions.__proto__.query = (parameters) =>
+                parameters.name === 'notifications'
+                    ? Promise.resolve({state: Notification.permission})
+                    : origQuery(parameters);
+        } catch(e) {}
+
+        const originalGetContext = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function(type, ...args) {
+            const ctx = originalGetContext.call(this, type, ...args);
+            if (type === '2d' && ctx) {
+                const originalGetImageData = ctx.getImageData.bind(ctx);
+                ctx.getImageData = function(x, y, w, h) {
+                    const data = originalGetImageData(x, y, w, h);
+                    for (let i = 0; i < data.data.length; i += 100) {
+                        data.data[i] = data.data[i] ^ (RND() & 1);
+                    }
+                    return data;
+                };
+            }
+            return ctx;
+        };
+
+        Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
+            get() { return this.parentElement; }
+        });
+    })();
 """
 
 
 def esc(text: str) -> str:
     return re.sub(r'([_*\[\]()~`>#+=|{}.!\-\\])', r'\\\1', str(text))
-
 
 def rj(path, default):
     try:
@@ -222,12 +276,10 @@ def rj(path, default):
     except Exception:
         return default
 
-
 def wj(path, data):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
-
 
 def load_chats():
     d = rj(CHATS_FILE, None)
@@ -236,29 +288,23 @@ def load_chats():
         return list(INITIAL_CHATS)
     return d
 
-
 def save_chats(chats):
     wj(CHATS_FILE, chats)
 
-
 def load_seen():
     return set(rj(STATE_FILE, []))
-
 
 def mark_seen(uid):
     seen = load_seen()
     seen.add(uid)
     wj(STATE_FILE, list(seen)[-5000:])
 
-
 def save_cookies(cookies: list):
     wj(COOKIES_FILE, cookies)
     log.info("[COOKIES] Saved %d cookies.", len(cookies))
 
-
 def load_cookies() -> list:
     return rj(COOKIES_FILE, [])
-
 
 def detect_service(text):
     lower = text.lower()
@@ -267,7 +313,6 @@ def detect_service(text):
             return name
     return "Unknown"
 
-
 def extract_code(text):
     m = re.search(r'\b(\d{3}-\d{3})\b', text)
     if m:
@@ -275,18 +320,16 @@ def extract_code(text):
     m = re.search(r'\b(\d{4,8})\b', text)
     return m.group(1) if m else "N/A"
 
-
 def get_flag(country):
     return COUNTRY_FLAGS.get(country) or COUNTRY_FLAGS.get(country.title()) or "🏴‍☠️"
-
 
 def is_admin(uid):
     return str(uid) in ADMIN_IDS
 
-
 async def save_debug(page):
     try:
         await page.screenshot(path=DEBUG_SS, full_page=True)
+        log.info("[DEBUG] Screenshot saved.")
     except Exception:
         pass
     try:
@@ -295,6 +338,25 @@ async def save_debug(page):
             f.write(html)
     except Exception:
         pass
+
+async def human_mouse_move(page):
+    try:
+        for _ in range(3):
+            x = 200 + (hash(str(_)) % 400)
+            y = 200 + (hash(str(_ * 7)) % 200)
+            await page.mouse.move(x, y)
+            await asyncio.sleep(0.15)
+    except Exception:
+        pass
+
+async def human_type(page, selector: str, text: str, min_delay=45, max_delay=110):
+    await page.click(selector)
+    await page.fill(selector, "")
+    await asyncio.sleep(0.3)
+    for ch in text:
+        delay = min_delay + (abs(hash(ch)) % (max_delay - min_delay))
+        await page.keyboard.type(ch, delay=delay)
+    await asyncio.sleep(0.4)
 
 
 async def start_browser():
@@ -308,10 +370,17 @@ async def start_browser():
             "--disable-setuid-sandbox",
             "--disable-dev-shm-usage",
             "--disable-blink-features=AutomationControlled",
-            "--disable-features=IsolateOrigins,site-per-process",
+            "--disable-features=IsolateOrigins,site-per-process,AutomationControlled",
             "--disable-web-security",
             "--disable-infobars",
+            "--disable-extensions",
+            "--disable-popup-blocking",
+            "--disable-default-apps",
             "--window-size=1280,800",
+            "--start-maximized",
+            "--ignore-certificate-errors",
+            "--allow-running-insecure-content",
+            "--disable-ipc-flooding-protection",
         ],
     )
     _bcontext = await _browser.new_context(
@@ -327,10 +396,10 @@ async def start_browser():
         java_script_enabled=True,
         color_scheme="light",
         extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+        permissions=["notifications"],
     )
-    await _bcontext.add_init_script(STEALTH_SCRIPT)
-    log.info("[PW] Browser ready.")
-
+    await _bcontext.add_init_script(EXTRA_STEALTH_JS)
+    log.info("[PW] Browser ready. Stealth: %s", "playwright-stealth" if STEALTH_AVAILABLE else "manual-only")
 
 async def stop_browser():
     global _pw, _browser, _bcontext
@@ -343,33 +412,325 @@ async def stop_browser():
     _pw = _browser = _bcontext = None
 
 
-async def _try_solve_turnstile(page) -> bool:
-    try:
+async def _wait_for_turnstile_token(page, timeout_secs=25) -> bool:
+    log.info("[TURNSTILE] Waiting up to %ds for token ...", timeout_secs)
+    deadline = asyncio.get_event_loop().time() + timeout_secs
+    while asyncio.get_event_loop().time() < deadline:
+        token = await page.evaluate("""
+            () => {
+                const byName = document.querySelector('[name="cf-turnstile-response"]');
+                if (byName && byName.value) return byName.value;
+                const byId = document.querySelector('#cf-turnstile-response');
+                if (byId && byId.value) return byId.value;
+                const textareas = document.querySelectorAll('textarea');
+                for (const ta of textareas) {
+                    if (ta.name && ta.name.includes('turnstile') && ta.value) return ta.value;
+                }
+                return '';
+            }
+        """)
+        if token:
+            log.info("[TURNSTILE] Token received! Length=%d", len(token))
+            return True
+        await asyncio.sleep(0.8)
+    return False
+
+
+async def _solve_turnstile(page) -> bool:
+    log.info("[TURNSTILE] Looking for Cloudflare iframe ...")
+
+    iframe_appeared = False
+    for i in range(12):
+        frames_with_cf = [f for f in page.frames if "challenges.cloudflare.com" in (f.url or "")]
+        if frames_with_cf:
+            iframe_appeared = True
+            log.info("[TURNSTILE] CF iframe found after %ds (url: %s)", i * 2, frames_with_cf[0].url[:70])
+            break
+        try:
+            fl = page.frame_locator('iframe[src*="challenges.cloudflare.com"]')
+            ct = await fl.locator('body').count()
+            if ct > 0:
+                iframe_appeared = True
+                break
+        except Exception:
+            pass
         await asyncio.sleep(2)
+
+    if not iframe_appeared:
+        log.info("[TURNSTILE] No CF iframe found — may be invisible/auto-passed or not present.")
+        return True
+
+    await asyncio.sleep(1.5)
+
+    clicked = False
+    selectors_to_try = [
+        'label.ctp-checkbox-label',
+        'input[type="checkbox"]',
+        '.cb-lb',
+        'span.mark',
+        'div[class*="check"]',
+        'div[class*="checkbox"]',
+        'label',
+        'div[class*="widget"]',
+        'body',
+    ]
+
+    fl = page.frame_locator('iframe[src*="challenges.cloudflare.com"]')
+    for sel in selectors_to_try:
+        try:
+            loc = fl.locator(sel).first
+            ct  = await loc.count()
+            if ct == 0:
+                continue
+            await loc.click(timeout=4000, force=True)
+            log.info("[TURNSTILE] Clicked selector: %s", sel)
+            clicked = True
+            break
+        except Exception as e:
+            log.info("[TURNSTILE] Selector %s failed: %s", sel, str(e)[:60])
+            continue
+
+    if not clicked:
         for frame in page.frames:
-            url = frame.url or ""
-            if "challenges.cloudflare.com" in url or "turnstile" in url.lower():
-                log.info("[TURNSTILE] Found CF frame: %s", url[:60])
-                for selector in [
-                    'input[type="checkbox"]',
-                    'label.ctp-checkbox-label',
-                    '.cb-lb',
-                    'span.mark',
-                    'body',
-                ]:
-                    try:
-                        el = await frame.query_selector(selector)
-                        if el:
-                            await el.click()
-                            log.info("[TURNSTILE] Clicked: %s", selector)
-                            await asyncio.sleep(3)
-                            return True
-                    except Exception:
-                        continue
+            if "challenges.cloudflare.com" not in (frame.url or ""):
+                continue
+            for sel in ['label', 'input', 'div', 'body']:
+                try:
+                    el = await frame.query_selector(sel)
+                    if el:
+                        await el.click(force=True)
+                        log.info("[TURNSTILE] Frame fallback clicked: %s", sel)
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+            if clicked:
+                break
+
+    if not clicked:
+        log.warning("[TURNSTILE] Could not click any element — trying mouse click on iframe position.")
+        try:
+            iframe_el = page.locator('iframe[src*="challenges.cloudflare.com"]').first
+            box = await iframe_el.bounding_box()
+            if box:
+                cx = box['x'] + box['width'] / 2
+                cy = box['y'] + box['height'] / 2
+                await page.mouse.move(cx - 20, cy - 10)
+                await asyncio.sleep(0.3)
+                await page.mouse.click(cx, cy)
+                log.info("[TURNSTILE] Mouse-clicked iframe at (%d, %d)", cx, cy)
+                clicked = True
+        except Exception as e:
+            log.warning("[TURNSTILE] Mouse click failed: %s", e)
+
+    passed = await _wait_for_turnstile_token(page, timeout_secs=22)
+
+    if passed:
+        log.info("[TURNSTILE] CHALLENGE PASSED!")
+        return True
+
+    log.warning("[TURNSTILE] Token not received. Turnstile may be managed/invisible or still processing.")
+    return False
+
+
+async def _pw_login() -> bool:
+    global _csrf, _logged_in, _fail_count, _login_method
+
+    if _bcontext is None:
+        await start_browser()
+
+    log.info("[PW] Starting login sequence ...")
+    page = await _bcontext.new_page()
+
+    try:
+        if STEALTH_AVAILABLE:
+            await stealth_async(page)
+            log.info("[PW] playwright-stealth applied.")
+
+        saved = load_cookies()
+        if saved:
+            await _bcontext.add_cookies(saved)
+            log.info("[PW] Injected %d saved cookies.", len(saved))
+
+        await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
+        await asyncio.sleep(2)
+        log.info("[PW] Page loaded: %s", page.url)
+
+        if "login" not in page.url.lower():
+            log.info("[PW] Cookies still valid — already logged in at: %s", page.url)
+            token = await page.evaluate(
+                'document.querySelector(\'meta[name="csrf-token"]\')?.content ?? ""'
+            )
+            if token:
+                _csrf = token
+                _fail_count   = 0
+                _logged_in    = True
+                _login_method = "playwright"
+                cookies = await _bcontext.cookies()
+                save_cookies(cookies)
+                return True
+
+        log.info("[PW] STEP 1 — Waiting for Cloudflare Turnstile to appear ...")
+        await human_mouse_move(page)
+
+        turnstile_ok = await _solve_turnstile(page)
+        if not turnstile_ok:
+            log.warning("[PW] Turnstile may not be fully solved. Proceeding anyway ...")
+
+        await asyncio.sleep(1)
+
+        email_sel = 'input[name="email"]'
+        email_visible = False
+        for i in range(10):
+            el = await page.query_selector(email_sel)
+            if el and await el.is_visible():
+                email_visible = True
+                log.info("[PW] Login form visible after %ds.", i * 2)
+                break
+            await asyncio.sleep(2)
+
+        if not email_visible:
+            log.warning("[PW] Email field never appeared.")
+            await save_debug(page)
+            _fail_count += 1
+            return False
+
+        await human_mouse_move(page)
+        await asyncio.sleep(0.5)
+
+        log.info("[PW] STEP 2 — Typing email ...")
+        await human_type(page, email_sel, IVAS_EMAIL, 50, 100)
+
+        log.info("[PW] STEP 3 — Typing password ...")
+        await human_type(page, 'input[name="password"]', IVAS_PASSWORD, 45, 95)
+
+        pw_check = await page.evaluate(
+            'document.querySelector("input[name=\'password\']")?.value ?? ""'
+        )
+        if not pw_check:
+            log.warning("[PW] Password field cleared by page JS — refilling forcefully.")
+            await page.evaluate(
+                f'document.querySelector("input[name=\'password\']").value = "{IVAS_PASSWORD}"'
+            )
+            await asyncio.sleep(0.3)
+
+        log.info("[PW] STEP 4 — Clicking submit button ...")
+        await human_mouse_move(page)
+        await asyncio.sleep(0.5)
+
+        submit_clicked = False
+        for btn_selector in [
+            'button[type="submit"]',
+            'button.btn-primary',
+            'button.btn-login',
+            'input[type="submit"]',
+            'button:has-text("Log in")',
+            'button:has-text("Login")',
+            'button:has-text("Sign in")',
+        ]:
+            try:
+                el = page.locator(btn_selector).first
+                ct = await el.count()
+                if ct > 0 and await el.is_visible():
+                    await el.click(timeout=5000)
+                    log.info("[PW] Clicked submit: %s", btn_selector)
+                    submit_clicked = True
+                    break
+            except Exception:
+                continue
+
+        if not submit_clicked:
+            log.info("[PW] No submit button found — trying JS click ...")
+            try:
+                await page.evaluate("""
+                    () => {
+                        const btn = document.querySelector('button[type="submit"]')
+                                 || document.querySelector('button.btn-primary')
+                                 || document.querySelector('button');
+                        if (btn) btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                    }
+                """)
+                submit_clicked = True
+                log.info("[PW] JS click dispatched.")
+            except Exception as e:
+                log.warning("[PW] JS click failed: %s", e)
+
+        if not submit_clicked:
+            await page.focus('input[name="password"]')
+            await page.keyboard.press("Enter")
+            log.info("[PW] Pressed Enter as last resort.")
+
+        log.info("[PW] STEP 5 — Waiting for redirect away from /login ...")
+        redirected = False
+        try:
+            await page.wait_for_function(
+                "() => !window.location.href.includes('/login')",
+                timeout=20_000,
+            )
+            redirected = True
+            log.info("[PW] Redirected to: %s", page.url)
+        except Exception:
+            pass
+
+        if not redirected:
+            log.info("[PW] No redirect yet — pressing Enter in password field ...")
+            await page.focus('input[name="password"]')
+            await page.keyboard.press("Enter")
+            try:
+                await page.wait_for_function(
+                    "() => !window.location.href.includes('/login')",
+                    timeout=15_000,
+                )
+                redirected = True
+                log.info("[PW] Redirected after Enter: %s", page.url)
+            except Exception:
+                pass
+
+        if not redirected:
+            body_text = ""
+            try:
+                body_text = (await page.inner_text("body"))[:600]
+            except Exception:
+                pass
+            log.warning("[PW] Still on login after all attempts. URL: %s", page.url)
+            log.warning("[PW] Page content: %s", body_text[:300])
+            await save_debug(page)
+            _fail_count += 1
+            _logged_in = False
+            return False
+
+        await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+
+        token = await page.evaluate(
+            'document.querySelector(\'meta[name="csrf-token"]\')?.content ?? ""'
+        )
+        if token:
+            _csrf = token
+            log.info("[PW] CSRF token: %s...", _csrf[:16])
+        else:
+            log.warning("[PW] No CSRF token on dashboard — will refresh next cycle.")
+
+        cookies = await _bcontext.cookies()
+        save_cookies(cookies)
+
+        _fail_count   = 0
+        _logged_in    = True
+        _login_method = "playwright"
+        log.info("[PW] LOGIN SUCCESS ✅")
+        return True
+
+    except Exception as exc:
+        log.error("[PW] Unexpected exception: %s", exc)
+        traceback.print_exc()
+        try:
+            await save_debug(page)
+        except Exception:
+            pass
+        _fail_count += 1
+        _logged_in = False
         return False
-    except Exception as e:
-        log.warning("[TURNSTILE] Error: %s", e)
-        return False
+    finally:
+        await page.close()
 
 
 async def _cookie_login() -> bool:
@@ -421,181 +782,18 @@ async def _cookie_login() -> bool:
         soup = BeautifulSoup(r.text, "html.parser")
         meta = soup.find("meta", {"name": "csrf-token"})
         if not meta:
-            log.warning("[COOKIE] No CSRF on portal — cookies may be stale.")
+            log.warning("[COOKIE] No CSRF on portal page — cookies stale.")
             return False
 
         _csrf         = meta.get("content", "")
         _logged_in    = True
         _login_method = "curl"
-        log.info("[COOKIE] Login via saved cookies SUCCESS. CSRF: %s...", _csrf[:12])
+        log.info("[COOKIE] Logged in via saved cookies. CSRF: %s...", _csrf[:16])
         return True
 
     except Exception as e:
         log.error("[COOKIE] Exception: %s", e)
         return False
-
-
-async def _pw_login() -> bool:
-    global _csrf, _logged_in, _fail_count, _login_method
-
-    if _bcontext is None:
-        await start_browser()
-
-    log.info("[PW] Attempting Playwright login ...")
-    page = await _bcontext.new_page()
-
-    try:
-        saved = load_cookies()
-        if saved:
-            await _bcontext.add_cookies(saved)
-            log.info("[PW] Injected %d saved cookies.", len(saved))
-
-        await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
-        log.info("[PW] Loaded: %s", page.url)
-
-        if "login" not in page.url.lower():
-            log.info("[PW] Already logged in via cookies: %s", page.url)
-            token = await page.evaluate(
-                'document.querySelector(\'meta[name="csrf-token"]\')?.content ?? ""'
-            )
-            if token:
-                _csrf         = token
-                _fail_count   = 0
-                _logged_in    = True
-                _login_method = "playwright"
-                cookies = await _bcontext.cookies()
-                save_cookies(cookies)
-                return True
-
-        email_input = None
-        for i in range(8):
-            email_input = await page.query_selector('input[name="email"]')
-            if email_input:
-                log.info("[PW] Login form ready (attempt %d)", i + 1)
-                break
-            log.info("[PW] Waiting for form ... (%d/8)", i + 1)
-            await asyncio.sleep(4)
-
-        if not email_input:
-            log.warning("[PW] Login form never appeared.")
-            await save_debug(page)
-            _fail_count += 1
-            return False
-
-        await asyncio.sleep(1)
-
-        await page.click('input[name="email"]')
-        await page.fill('input[name="email"]', "")
-        await page.type('input[name="email"]', IVAS_EMAIL, delay=60)
-        await asyncio.sleep(0.4)
-
-        await page.click('input[name="password"]')
-        await page.fill('input[name="password"]', "")
-        await page.type('input[name="password"]', IVAS_PASSWORD, delay=55)
-        await asyncio.sleep(0.3)
-
-        log.info("[PW] Credentials filled. Handling Turnstile ...")
-        await _try_solve_turnstile(page)
-        await asyncio.sleep(1)
-
-        pw_val = await page.evaluate(
-            'document.querySelector("input[name=\'password\']")?.value ?? ""'
-        )
-        if not pw_val:
-            log.warning("[PW] Password field cleared by page — refilling.")
-            await page.fill('input[name="password"]', IVAS_PASSWORD)
-            await asyncio.sleep(0.5)
-
-        log.info("[PW] Submitting ...")
-        submit_btn = await page.query_selector('button[type="submit"]')
-        if submit_btn:
-            await submit_btn.click()
-        else:
-            await page.keyboard.press("Enter")
-
-        redirected = False
-        try:
-            await page.wait_for_function(
-                "() => !window.location.href.includes('/login')",
-                timeout=18_000,
-            )
-            redirected = True
-            log.info("[PW] Redirected after click: %s", page.url)
-        except Exception:
-            pass
-
-        if not redirected:
-            log.info("[PW] No redirect — pressing Enter in password ...")
-            await page.focus('input[name="password"]')
-            await page.keyboard.press("Enter")
-            try:
-                await page.wait_for_function(
-                    "() => !window.location.href.includes('/login')",
-                    timeout=12_000,
-                )
-                redirected = True
-                log.info("[PW] Redirected after Enter: %s", page.url)
-            except Exception:
-                pass
-
-        if not redirected:
-            log.info("[PW] Trying JS form.submit() ...")
-            await page.evaluate("""
-                () => { const f = document.querySelector('form'); if (f) f.submit(); }
-            """)
-            try:
-                await page.wait_for_function(
-                    "() => !window.location.href.includes('/login')",
-                    timeout=15_000,
-                )
-                redirected = True
-                log.info("[PW] Redirected after JS submit: %s", page.url)
-            except Exception:
-                pass
-
-        if not redirected:
-            log.warning("[PW] All strategies failed. URL: %s", page.url)
-            try:
-                body = (await page.inner_text("body"))[:500]
-                log.warning("[PW] Page: %s", body)
-            except Exception:
-                pass
-            await save_debug(page)
-            _fail_count += 1
-            _logged_in = False
-            return False
-
-        await page.wait_for_load_state("domcontentloaded", timeout=15_000)
-
-        token = await page.evaluate(
-            'document.querySelector(\'meta[name="csrf-token"]\')?.content ?? ""'
-        )
-        if token:
-            _csrf = token
-            log.info("[PW] CSRF: %s...", _csrf[:12])
-        else:
-            log.warning("[PW] No CSRF on dashboard.")
-
-        cookies = await _bcontext.cookies()
-        save_cookies(cookies)
-
-        _fail_count   = 0
-        _logged_in    = True
-        _login_method = "playwright"
-        log.info("[PW] Login SUCCESS")
-        return True
-
-    except Exception as exc:
-        log.error("[PW] Exception: %s", exc)
-        try:
-            await save_debug(page)
-        except Exception:
-            pass
-        _fail_count += 1
-        _logged_in = False
-        return False
-    finally:
-        await page.close()
 
 
 async def _curl_login() -> bool:
@@ -647,19 +845,14 @@ async def _curl_login() -> bool:
         soup  = BeautifulSoup(r.text, "html.parser")
         field = soup.find("input", {"name": "_token"})
         if not field:
-            log.warning("[CURL] CSRF field missing — CF is blocking.")
-            try:
-                with open(DEBUG_HTML, "w") as f:
-                    f.write(r.text[:5000])
-            except Exception:
-                pass
+            log.warning("[CURL] CSRF field missing — CF blocking without JS.")
             _fail_count += 1
             return False
 
         csrf_token = field.get("value", "")
-        log.info("[CURL] Page CSRF: %s...", csrf_token[:12])
+        log.info("[CURL] CSRF: %s...", csrf_token[:16])
 
-        await asyncio.sleep(1.2)
+        await asyncio.sleep(1.5)
 
         post_headers = {
             **headers,
@@ -676,10 +869,10 @@ async def _curl_login() -> bool:
             },
             headers=post_headers,
         )
-        log.info("[CURL] POST: HTTP %d, URL: %s", resp.status_code, str(resp.url)[:60])
+        log.info("[CURL] POST: HTTP %d, URL: %s", resp.status_code, str(resp.url)[:70])
 
         if "login" in str(resp.url).lower():
-            log.warning("[CURL] Still on login page — CF blocked POST.")
+            log.warning("[CURL] Still on login — CF Turnstile blocked POST.")
             _fail_count += 1
             _logged_in = False
             return False
@@ -688,15 +881,14 @@ async def _curl_login() -> bool:
         meta = dash.find("meta", {"name": "csrf-token"})
         if meta:
             _csrf = meta.get("content", "")
-            log.info("[CURL] Dashboard CSRF: %s...", _csrf[:12])
+            log.info("[CURL] Dashboard CSRF: %s...", _csrf[:16])
         else:
             _csrf = csrf_token
-            log.warning("[CURL] No dashboard CSRF — using login token.")
 
         _fail_count   = 0
         _logged_in    = True
         _login_method = "curl"
-        log.info("[CURL] Login SUCCESS")
+        log.info("[CURL] LOGIN SUCCESS ✅")
         return True
 
     except Exception as exc:
@@ -715,16 +907,14 @@ async def do_login() -> bool:
     except Exception as e:
         log.error("Cookie login crashed: %s", e)
 
-    log.info("Cookies failed -> Playwright ...")
-
+    log.info("Cookies failed → Playwright ...")
     try:
         if await _pw_login():
             return True
     except Exception as e:
         log.error("PW login crashed: %s", e)
 
-    log.info("Playwright failed -> curl_cffi ...")
-
+    log.info("Playwright failed → curl_cffi ...")
     try:
         if await _curl_login():
             return True
@@ -951,7 +1141,7 @@ async def poll_loop(bot):
         log.warning("Attempt %d/3 failed — retrying in %ds ...", attempt, wait)
         await asyncio.sleep(wait)
     else:
-        log.error("All 3 initial login attempts failed. Continuing to retry in loop.")
+        log.error("All 3 initial login attempts failed. Retrying indefinitely ...")
 
     while True:
         try:
@@ -1020,12 +1210,14 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ses = "✅ Logged in" if _logged_in else "❌ Logged out"
     csr = "✅" if _csrf else "❌"
     ck  = len(load_cookies())
+    sth = "✅ playwright-stealth" if STEALTH_AVAILABLE else "⚠️ manual-only"
     await update.message.reply_text(
         f"*Bot Status*\n\n"
         f"Playwright: {pw}\n"
         f"curl\\_cffi: {cur}\n"
         f"Session: {ses}\n"
         f"CSRF: {csr}\n"
+        f"Stealth: {sth}\n"
         f"Method: `{esc(_login_method)}`\n"
         f"Fails: {_fail_count}\n"
         f"Cookies: {ck} saved\n"
@@ -1063,9 +1255,7 @@ async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     if not sent:
-        await update.message.reply_text(
-            "No debug data yet. Login hasn't failed visually, or succeeded."
-        )
+        await update.message.reply_text("No debug data yet.")
 
 
 async def cmd_relogin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1141,10 +1331,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 async def main():
     log.info("=" * 55)
-    log.info("iVAS SMS Bot v9 — Fast Cookie Login")
-    log.info("Email : %s", IVAS_EMAIL)
-    log.info("Admins: %s", ADMIN_IDS)
-    log.info("Chats : %s", load_chats())
+    log.info("iVAS SMS Bot v10 — Turnstile-First Login")
+    log.info("Email  : %s", IVAS_EMAIL)
+    log.info("Admins : %s", ADMIN_IDS)
+    log.info("Stealth: %s", "playwright-stealth ACTIVE" if STEALTH_AVAILABLE else "manual JS only")
+    log.info("Chats  : %s", load_chats())
     log.info("=" * 55)
 
     await start_browser()
