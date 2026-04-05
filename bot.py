@@ -6,42 +6,59 @@ import traceback
 import logging
 import sys
 from datetime import datetime, timedelta
-from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright, BrowserContext, Playwright
+from playwright.async_api import async_playwright
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import Conflict, TimedOut, NetworkError, RetryAfter
 
+# ─────────────────────────────────────────────────────────────
+#  LOGGING
+# ─────────────────────────────────────────────────────────────
 logging.basicConfig(
     stream=sys.stdout,
     level=logging.INFO,
-    format="%(asctime)s %(message)s",
+    format="%(asctime)s  %(message)s",
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger(__name__)
 
-# ── Credentials ── env vars override, hardcoded values are the fallback
-BOT_TOKEN     = os.environ.get("BOT_TOKEN",      "8678706957:AAFhh-j91XA7_fcu_Be6SE6REkyisDHVXAA")
-IVAS_EMAIL    = os.environ.get("IVAS_EMAIL",      "tawandamahachi07@gmail.com")
-IVAS_PASSWORD = os.environ.get("IVAS_PASSWORD",   "mahachi2007")
-ADMIN_IDS     = [os.environ.get("ADMIN_ID",       "8339856952")]
-INITIAL_CHATS = [os.environ.get("INITIAL_CHAT",   "-1003854641278")]
+# ─────────────────────────────────────────────────────────────
+#  HARDCODED CREDENTIALS  (no env vars needed)
+# ─────────────────────────────────────────────────────────────
+BOT_TOKEN     = "8678706957:AAFhh-j91XA7_fcu_Be6SE6REkyisDHVXAA"
+IVAS_EMAIL    = "tawandamahachi07@gmail.com"
+IVAS_PASSWORD = "mahachi2007"
+ADMIN_IDS     = ["8339856952"]
+INITIAL_CHATS = ["-1003854641278"]
 
-BASE         = "https://www.ivasms.com"
-LOGIN_URL    = f"{BASE}/login"
-SMS_ENDPOINT = f"{BASE}/portal/sms/received/getsms"
-NUMBERS_URL  = f"{BASE}/portal/sms/received/getsms/number"
-SMS_DETAIL   = f"{BASE}/portal/sms/received/getsms/number/sms"
-PORTAL_URL   = f"{BASE}/portal/sms/received"
+# ─────────────────────────────────────────────────────────────
+#  SITE URLS
+# ─────────────────────────────────────────────────────────────
+BASE_URL     = "https://www.ivasms.com"
+LOGIN_URL    = "https://www.ivasms.com/login"
+PORTAL_URL   = "https://www.ivasms.com/portal/sms/received"
+SMS_URL      = "https://www.ivasms.com/portal/sms/received/getsms"
+NUMBERS_URL  = "https://www.ivasms.com/portal/sms/received/getsms/number"
+SMS_DETAIL   = "https://www.ivasms.com/portal/sms/received/getsms/number/sms"
 
-DATA_DIR   = "/data" if os.path.isdir("/data") else "."
-STATE_FILE = os.path.join(DATA_DIR, "seen.json")
-CHATS_FILE = os.path.join(DATA_DIR, "chats.json")
+# ─────────────────────────────────────────────────────────────
+#  FILE PATHS
+# ─────────────────────────────────────────────────────────────
+DATA_DIR      = "/data" if os.path.isdir("/data") else "."
+STATE_FILE    = os.path.join(DATA_DIR, "seen.json")
+CHATS_FILE    = os.path.join(DATA_DIR, "chats.json")
+PROFILE_DIR   = os.path.join(DATA_DIR, "chrome_profile")
 
-POLL_SECS  = 30
+# ─────────────────────────────────────────────────────────────
+#  SETTINGS
+# ─────────────────────────────────────────────────────────────
+POLL_INTERVAL = 30   # seconds between each SMS check
 
+# ─────────────────────────────────────────────────────────────
+#  TELEGRAM BUTTONS  (shown on every message)
+# ─────────────────────────────────────────────────────────────
 BUTTONS = InlineKeyboardMarkup([
     [InlineKeyboardButton("📱 NUMBER CHANNEL", url="https://t.me/mrafrixtech")],
     [InlineKeyboardButton("📡 BACKUP CHANNEL",  url="https://t.me/auroratechinc")],
@@ -49,146 +66,244 @@ BUTTONS = InlineKeyboardMarkup([
     [InlineKeyboardButton("👨‍💻 CONTACT DEV",     url="https://t.me/jaden_afrix")],
 ])
 
+# ─────────────────────────────────────────────────────────────
+#  COUNTRY FLAGS
+# ─────────────────────────────────────────────────────────────
 COUNTRY_FLAGS = {
-    "Afghanistan":"🇦🇫","Albania":"🇦🇱","Algeria":"🇩🇿","Angola":"🇦🇴","Argentina":"🇦🇷",
-    "Armenia":"🇦🇲","Australia":"🇦🇺","Austria":"🇦🇹","Azerbaijan":"🇦🇿","Bahrain":"🇧🇭",
-    "Bangladesh":"🇧🇩","Belarus":"🇧🇾","Belgium":"🇧🇪","Benin":"🇧🇯","Bolivia":"🇧🇴",
-    "Brazil":"🇧🇷","Bulgaria":"🇧🇬","Cambodia":"🇰🇭","Cameroon":"🇨🇲","Canada":"🇨🇦",
-    "Chad":"🇹🇩","Chile":"🇨🇱","China":"🇨🇳","Colombia":"🇨🇴","Congo":"🇨🇬",
-    "Croatia":"🇭🇷","Cuba":"🇨🇺","Cyprus":"🇨🇾","Czech Republic":"🇨🇿","Denmark":"🇩🇰",
-    "Egypt":"🇪🇬","Estonia":"🇪🇪","Ethiopia":"🇪🇹","Finland":"🇫🇮","France":"🇫🇷",
-    "Gabon":"🇬🇦","Gambia":"🇬🇲","Georgia":"🇬🇪","Germany":"🇩🇪","Ghana":"🇬🇭",
-    "Greece":"🇬🇷","Guatemala":"🇬🇹","Guinea":"🇬🇳","Haiti":"🇭🇹","Honduras":"🇭🇳",
-    "Hong Kong":"🇭🇰","Hungary":"🇭🇺","Iceland":"🇮🇸","India":"🇮🇳","Indonesia":"🇮🇩",
-    "Iran":"🇮🇷","Iraq":"🇮🇶","Ireland":"🇮🇪","Israel":"🇮🇱","Italy":"🇮🇹",
-    "Ivory Coast":"🇨🇮","IVORY COAST":"🇨🇮","Jamaica":"🇯🇲","Japan":"🇯🇵","Jordan":"🇯🇴",
-    "Kazakhstan":"🇰🇿","Kenya":"🇰🇪","Kuwait":"🇰🇼","Kyrgyzstan":"🇰🇬","Laos":"🇱🇦",
-    "Latvia":"🇱🇻","Lebanon":"🇱🇧","Liberia":"🇱🇷","Libya":"🇱🇾","Lithuania":"🇱🇹",
-    "Luxembourg":"🇱🇺","Madagascar":"🇲🇬","Malaysia":"🇲🇾","Mali":"🇲🇱","Malta":"🇲🇹",
-    "Mexico":"🇲🇽","Moldova":"🇲🇩","Monaco":"🇲🇨","Mongolia":"🇲🇳","Montenegro":"🇲🇪",
-    "Morocco":"🇲🇦","Mozambique":"🇲🇿","Myanmar":"🇲🇲","Namibia":"🇳🇦","Nepal":"🇳🇵",
-    "Netherlands":"🇳🇱","New Zealand":"🇳🇿","Nicaragua":"🇳🇮","Niger":"🇳🇪","Nigeria":"🇳🇬",
-    "North Korea":"🇰🇵","North Macedonia":"🇲🇰","Norway":"🇳🇴","Oman":"🇴🇲","Pakistan":"🇵🇰",
-    "Panama":"🇵🇦","Paraguay":"🇵🇾","Peru":"🇵🇪","Philippines":"🇵🇭","Poland":"🇵🇱",
-    "Portugal":"🇵🇹","Qatar":"🇶🇦","Romania":"🇷🇴","Russia":"🇷🇺","Rwanda":"🇷🇼",
-    "Saudi Arabia":"🇸🇦","Senegal":"🇸🇳","Serbia":"🇷🇸","Sierra Leone":"🇸🇱",
-    "Singapore":"🇸🇬","Slovakia":"🇸🇰","Slovenia":"🇸🇮","Somalia":"🇸🇴",
-    "South Africa":"🇿🇦","South Korea":"🇰🇷","Spain":"🇪🇸","Sri Lanka":"🇱🇰",
-    "Sudan":"🇸🇩","Sweden":"🇸🇪","Switzerland":"🇨🇭","Syria":"🇸🇾","Taiwan":"🇹🇼",
-    "Tajikistan":"🇹🇯","Tanzania":"🇹🇿","Thailand":"🇹🇭","Togo":"🇹🇬","TOGO":"🇹🇬",
-    "Tunisia":"🇹🇳","Turkey":"🇹🇷","Turkmenistan":"🇹🇲","Uganda":"🇺🇬","Ukraine":"🇺🇦",
-    "United Arab Emirates":"🇦🇪","United Kingdom":"🇬🇧","United States":"🇺🇸",
-    "Uruguay":"🇺🇾","Uzbekistan":"🇺🇿","Venezuela":"🇻🇪","Vietnam":"🇻🇳",
-    "Yemen":"🇾🇪","Zambia":"🇿🇲","Zimbabwe":"🇿🇼",
+    "Afghanistan": "🇦🇫", "Albania": "🇦🇱", "Algeria": "🇩🇿", "Angola": "🇦🇴",
+    "Argentina": "🇦🇷", "Armenia": "🇦🇲", "Australia": "🇦🇺", "Austria": "🇦🇹",
+    "Azerbaijan": "🇦🇿", "Bahrain": "🇧🇭", "Bangladesh": "🇧🇩", "Belarus": "🇧🇾",
+    "Belgium": "🇧🇪", "Benin": "🇧🇯", "Bolivia": "🇧🇴", "Brazil": "🇧🇷",
+    "Bulgaria": "🇧🇬", "Cambodia": "🇰🇭", "Cameroon": "🇨🇲", "Canada": "🇨🇦",
+    "Chad": "🇹🇩", "Chile": "🇨🇱", "China": "🇨🇳", "Colombia": "🇨🇴",
+    "Congo": "🇨🇬", "Croatia": "🇭🇷", "Cuba": "🇨🇺", "Cyprus": "🇨🇾",
+    "Czech Republic": "🇨🇿", "Denmark": "🇩🇰", "Egypt": "🇪🇬", "Estonia": "🇪🇪",
+    "Ethiopia": "🇪🇹", "Finland": "🇫🇮", "France": "🇫🇷", "Gabon": "🇬🇦",
+    "Gambia": "🇬🇲", "Georgia": "🇬🇪", "Germany": "🇩🇪", "Ghana": "🇬🇭",
+    "Greece": "🇬🇷", "Guatemala": "🇬🇹", "Guinea": "🇬🇳", "Haiti": "🇭🇹",
+    "Honduras": "🇭🇳", "Hong Kong": "🇭🇰", "Hungary": "🇭🇺", "Iceland": "🇮🇸",
+    "India": "🇮🇳", "Indonesia": "🇮🇩", "Iran": "🇮🇷", "Iraq": "🇮🇶",
+    "Ireland": "🇮🇪", "Israel": "🇮🇱", "Italy": "🇮🇹", "Ivory Coast": "🇨🇮",
+    "IVORY COAST": "🇨🇮", "Jamaica": "🇯🇲", "Japan": "🇯🇵", "Jordan": "🇯🇴",
+    "Kazakhstan": "🇰🇿", "Kenya": "🇰🇪", "Kuwait": "🇰🇼", "Kyrgyzstan": "🇰🇬",
+    "Laos": "🇱🇦", "Latvia": "🇱🇻", "Lebanon": "🇱🇧", "Liberia": "🇱🇷",
+    "Libya": "🇱🇾", "Lithuania": "🇱🇹", "Luxembourg": "🇱🇺", "Madagascar": "🇲🇬",
+    "Malaysia": "🇲🇾", "Mali": "🇲🇱", "Malta": "🇲🇹", "Mexico": "🇲🇽",
+    "Moldova": "🇲🇩", "Monaco": "🇲🇨", "Mongolia": "🇲🇳", "Montenegro": "🇲🇪",
+    "Morocco": "🇲🇦", "Mozambique": "🇲🇿", "Myanmar": "🇲🇲", "Namibia": "🇳🇦",
+    "Nepal": "🇳🇵", "Netherlands": "🇳🇱", "New Zealand": "🇳🇿", "Nicaragua": "🇳🇮",
+    "Niger": "🇳🇪", "Nigeria": "🇳🇬", "North Korea": "🇰🇵", "North Macedonia": "🇲🇰",
+    "Norway": "🇳🇴", "Oman": "🇴🇲", "Pakistan": "🇵🇰", "Panama": "🇵🇦",
+    "Paraguay": "🇵🇾", "Peru": "🇵🇪", "Philippines": "🇵🇭", "Poland": "🇵🇱",
+    "Portugal": "🇵🇹", "Qatar": "🇶🇦", "Romania": "🇷🇴", "Russia": "🇷🇺",
+    "Rwanda": "🇷🇼", "Saudi Arabia": "🇸🇦", "Senegal": "🇸🇳", "Serbia": "🇷🇸",
+    "Sierra Leone": "🇸🇱", "Singapore": "🇸🇬", "Slovakia": "🇸🇰", "Slovenia": "🇸🇮",
+    "Somalia": "🇸🇴", "South Africa": "🇿🇦", "South Korea": "🇰🇷", "Spain": "🇪🇸",
+    "Sri Lanka": "🇱🇰", "Sudan": "🇸🇩", "Sweden": "🇸🇪", "Switzerland": "🇨🇭",
+    "Syria": "🇸🇾", "Taiwan": "🇹🇼", "Tajikistan": "🇹🇯", "Tanzania": "🇹🇿",
+    "Thailand": "🇹🇭", "Togo": "🇹🇬", "TOGO": "🇹🇬", "Tunisia": "🇹🇳",
+    "Turkey": "🇹🇷", "Turkmenistan": "🇹🇲", "Uganda": "🇺🇬", "Ukraine": "🇺🇦",
+    "United Arab Emirates": "🇦🇪", "United Kingdom": "🇬🇧", "United States": "🇺🇸",
+    "Uruguay": "🇺🇾", "Uzbekistan": "🇺🇿", "Venezuela": "🇻🇪", "Vietnam": "🇻🇳",
+    "Yemen": "🇾🇪", "Zambia": "🇿🇲", "Zimbabwe": "🇿🇼",
 }
 
+# ─────────────────────────────────────────────────────────────
+#  SERVICE DETECTION
+# ─────────────────────────────────────────────────────────────
 SERVICE_KEYWORDS = {
-    "Facebook":["facebook"],"Google":["google","gmail"],"WhatsApp":["whatsapp"],
-    "Telegram":["telegram"],"Instagram":["instagram"],"Amazon":["amazon"],
-    "Netflix":["netflix"],"LinkedIn":["linkedin"],"Microsoft":["microsoft","outlook","live.com"],
-    "Apple":["apple","icloud"],"Twitter":["twitter","x.com"],"Snapchat":["snapchat"],
-    "TikTok":["tiktok"],"Discord":["discord"],"Signal":["signal"],"Viber":["viber"],
-    "IMO":["imo"],"PayPal":["paypal"],"Binance":["binance"],"Uber":["uber"],
-    "Bolt":["bolt"],"Airbnb":["airbnb"],"Yahoo":["yahoo"],"Steam":["steam"],
-    "Foodpanda":["foodpanda"],"Messenger":["messenger","meta"],"YouTube":["youtube"],
-    "eBay":["ebay"],"AliExpress":["aliexpress"],"Alibaba":["alibaba"],"Flipkart":["flipkart"],
-    "Skype":["skype"],"Spotify":["spotify"],"Stripe":["stripe"],"Cash App":["cash app"],
-    "Venmo":["venmo"],"Zelle":["zelle"],"Wise":["wise","transferwise"],"Coinbase":["coinbase"],
-    "KuCoin":["kucoin"],"Bybit":["bybit"],"OKX":["okx"],"Huobi":["huobi"],
-    "Kraken":["kraken"],"MetaMask":["metamask"],"Epic Games":["epic games","epicgames"],
-    "PlayStation":["playstation","psn"],"Xbox":["xbox"],"Twitch":["twitch"],
-    "Reddit":["reddit"],"ProtonMail":["protonmail","proton"],"Zoho":["zoho"],
-    "Indeed":["indeed"],"Upwork":["upwork"],"Fiverr":["fiverr"],
-    "Booking.com":["booking.com"],"Careem":["careem"],"Swiggy":["swiggy"],
-    "Zomato":["zomato"],"McDonald's":["mcdonalds","mcdonald's"],"KFC":["kfc"],
-    "Shein":["shein"],"OnlyFans":["onlyfans"],"Tinder":["tinder"],"Bumble":["bumble"],
-    "Line":["line"],"WeChat":["wechat"],"VK":["vk","vkontakte"],
+    "Facebook":     ["facebook"],
+    "Google":       ["google", "gmail"],
+    "WhatsApp":     ["whatsapp"],
+    "Telegram":     ["telegram"],
+    "Instagram":    ["instagram"],
+    "Amazon":       ["amazon"],
+    "Netflix":      ["netflix"],
+    "LinkedIn":     ["linkedin"],
+    "Microsoft":    ["microsoft", "outlook", "live.com"],
+    "Apple":        ["apple", "icloud"],
+    "Twitter":      ["twitter", "x.com"],
+    "Snapchat":     ["snapchat"],
+    "TikTok":       ["tiktok"],
+    "Discord":      ["discord"],
+    "Signal":       ["signal"],
+    "Viber":        ["viber"],
+    "IMO":          ["imo"],
+    "PayPal":       ["paypal"],
+    "Binance":      ["binance"],
+    "Uber":         ["uber"],
+    "Bolt":         ["bolt"],
+    "Airbnb":       ["airbnb"],
+    "Yahoo":        ["yahoo"],
+    "Steam":        ["steam"],
+    "Foodpanda":    ["foodpanda"],
+    "Messenger":    ["messenger", "meta"],
+    "YouTube":      ["youtube"],
+    "eBay":         ["ebay"],
+    "AliExpress":   ["aliexpress"],
+    "Alibaba":      ["alibaba"],
+    "Flipkart":     ["flipkart"],
+    "Skype":        ["skype"],
+    "Spotify":      ["spotify"],
+    "Stripe":       ["stripe"],
+    "Cash App":     ["cash app", "cashapp"],
+    "Venmo":        ["venmo"],
+    "Zelle":        ["zelle"],
+    "Wise":         ["wise", "transferwise"],
+    "Coinbase":     ["coinbase"],
+    "KuCoin":       ["kucoin"],
+    "Bybit":        ["bybit"],
+    "OKX":          ["okx"],
+    "Huobi":        ["huobi"],
+    "Kraken":       ["kraken"],
+    "MetaMask":     ["metamask"],
+    "Epic Games":   ["epic games", "epicgames"],
+    "PlayStation":  ["playstation", "psn"],
+    "Xbox":         ["xbox"],
+    "Twitch":       ["twitch"],
+    "Reddit":       ["reddit"],
+    "ProtonMail":   ["protonmail", "proton"],
+    "Zoho":         ["zoho"],
+    "Indeed":       ["indeed"],
+    "Upwork":       ["upwork"],
+    "Fiverr":       ["fiverr"],
+    "Booking.com":  ["booking.com"],
+    "Careem":       ["careem"],
+    "Swiggy":       ["swiggy"],
+    "Zomato":       ["zomato"],
+    "McDonald's":   ["mcdonalds", "mcdonald's"],
+    "KFC":          ["kfc"],
+    "Shein":        ["shein"],
+    "OnlyFans":     ["onlyfans"],
+    "Tinder":       ["tinder"],
+    "Bumble":       ["bumble"],
+    "Line":         ["line app", "line:"],
+    "WeChat":       ["wechat"],
+    "VK":           ["vk.com", "vkontakte"],
 }
 
 SERVICE_EMOJIS = {
-    "Telegram":"📩","WhatsApp":"🟢","Facebook":"📘","Instagram":"📸","Messenger":"💬",
-    "Google":"🔍","YouTube":"▶️","Twitter":"🐦","TikTok":"🎵","Snapchat":"👻",
-    "Amazon":"🛒","eBay":"📦","AliExpress":"📦","Alibaba":"🏭","Flipkart":"📦",
-    "Microsoft":"🪟","Outlook":"📧","Skype":"📞","Netflix":"🎬","Spotify":"🎶",
-    "Apple":"🍏","PayPal":"💰","Stripe":"💳","Cash App":"💵","Venmo":"💸",
-    "Zelle":"🏦","Wise":"🌐","Binance":"🪙","Coinbase":"🪙","KuCoin":"🪙",
-    "Bybit":"📈","OKX":"🟠","Huobi":"🔥","Kraken":"🐙","MetaMask":"🦊",
-    "Discord":"🗨️","Steam":"🎮","Epic Games":"🕹️","PlayStation":"🎮","Xbox":"🎮",
-    "Twitch":"📺","Reddit":"👽","Yahoo":"🟣","ProtonMail":"🔐","LinkedIn":"💼",
-    "Indeed":"📋","Upwork":"🧑‍💻","Fiverr":"💻","Airbnb":"🏠","Booking.com":"🛏️",
-    "Uber":"🚗","Bolt":"🚖","Careem":"🚗","Swiggy":"🍔","Zomato":"🍽️",
-    "Foodpanda":"🍱","McDonald's":"🍟","KFC":"🍗","Shein":"👗","OnlyFans":"🔞",
-    "Tinder":"🔥","Bumble":"🐝","Signal":"🔐","Viber":"📞","Line":"💬",
-    "WeChat":"💬","VK":"🌐","Unknown":"❓",
+    "Telegram": "📩", "WhatsApp": "🟢", "Facebook": "📘", "Instagram": "📸",
+    "Messenger": "💬", "Google": "🔍", "YouTube": "▶️", "Twitter": "🐦",
+    "TikTok": "🎵", "Snapchat": "👻", "Amazon": "🛒", "eBay": "📦",
+    "AliExpress": "📦", "Alibaba": "🏭", "Flipkart": "📦", "Microsoft": "🪟",
+    "Outlook": "📧", "Skype": "📞", "Netflix": "🎬", "Spotify": "🎶",
+    "Apple": "🍏", "PayPal": "💰", "Stripe": "💳", "Cash App": "💵",
+    "Venmo": "💸", "Zelle": "🏦", "Wise": "🌐", "Binance": "🪙",
+    "Coinbase": "🪙", "KuCoin": "🪙", "Bybit": "📈", "OKX": "🟠",
+    "Huobi": "🔥", "Kraken": "🐙", "MetaMask": "🦊", "Discord": "🗨️",
+    "Steam": "🎮", "Epic Games": "🕹️", "PlayStation": "🎮", "Xbox": "🎮",
+    "Twitch": "📺", "Reddit": "👽", "Yahoo": "🟣", "ProtonMail": "🔐",
+    "LinkedIn": "💼", "Indeed": "📋", "Upwork": "🧑‍💻", "Fiverr": "💻",
+    "Airbnb": "🏠", "Booking.com": "🛏️", "Uber": "🚗", "Bolt": "🚖",
+    "Careem": "🚗", "Swiggy": "🍔", "Zomato": "🍽️", "Foodpanda": "🍱",
+    "McDonald's": "🍟", "KFC": "🍗", "Shein": "👗", "OnlyFans": "🔞",
+    "Tinder": "🔥", "Bumble": "🐝", "Signal": "🔐", "Viber": "📞",
+    "Line": "💬", "WeChat": "💬", "VK": "🌐", "Unknown": "❓",
 }
 
-_pw:      Playwright     | None = None
-_context: BrowserContext | None = None
-_csrf:    str  = ""
-_logged_in: bool = False
-_fail_count: int  = 0
+# ─────────────────────────────────────────────────────────────
+#  GLOBAL BROWSER STATE
+#  All declared here at module level so there are zero
+#  "used before global declaration" errors anywhere.
+# ─────────────────────────────────────────────────────────────
+_playwright   = None   # playwright instance
+_browser_ctx  = None   # persistent browser context
+_csrf_token   = ""     # last known CSRF token
+_is_logged_in = False  # whether we have a valid session
+_fail_count   = 0      # consecutive login failures
 
 
-def _esc(text: str) -> str:
+# ─────────────────────────────────────────────────────────────
+#  HELPER FUNCTIONS
+# ─────────────────────────────────────────────────────────────
+def escape_md(text: str) -> str:
+    """Escape all MarkdownV2 special characters."""
     return re.sub(r'([_*\[\]()~`>#+=|{}.!\-\\])', r'\\\1', str(text))
 
-def _load(path: str, default):
+
+def read_json(path: str, default):
+    """Read a JSON file safely, returning default if missing or corrupt."""
     try:
-        with open(path) as f:
+        with open(path, "r") as f:
             return json.load(f)
     except Exception:
         return default
 
-def _save(path: str, data) -> None:
+
+def write_json(path: str, data) -> None:
+    """Write data to a JSON file, creating directories as needed."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 
+
 def load_chats() -> list:
-    d = _load(CHATS_FILE, None)
-    if d is None:
-        _save(CHATS_FILE, INITIAL_CHATS)
+    data = read_json(CHATS_FILE, None)
+    if data is None:
+        write_json(CHATS_FILE, INITIAL_CHATS)
         return list(INITIAL_CHATS)
-    return d
+    return data
+
 
 def save_chats(chats: list) -> None:
-    _save(CHATS_FILE, chats)
+    write_json(CHATS_FILE, chats)
+
 
 def load_seen() -> set:
-    return set(_load(STATE_FILE, []))
+    return set(read_json(STATE_FILE, []))
+
 
 def mark_seen(uid: str) -> None:
     seen = load_seen()
     seen.add(uid)
-    _save(STATE_FILE, list(seen)[-5000:])
+    # Keep only the last 5000 entries so the file never grows unbounded
+    trimmed = list(seen)[-5000:]
+    write_json(STATE_FILE, trimmed)
 
-def detect_service(text: str) -> str:
-    lower = text.lower()
-    for name, kws in SERVICE_KEYWORDS.items():
-        if any(k in lower for k in kws):
+
+def detect_service(sms_text: str) -> str:
+    lower = sms_text.lower()
+    for name, keywords in SERVICE_KEYWORDS.items():
+        if any(kw in lower for kw in keywords):
             return name
     return "Unknown"
 
-def extract_code(text: str) -> str:
-    m = re.search(r'\b(\d{3}-\d{3})\b', text)
+
+def extract_code(sms_text: str) -> str:
+    # Try dashed format first: 123-456
+    m = re.search(r'\b(\d{3}-\d{3})\b', sms_text)
     if m:
         return m.group(1)
-    m = re.search(r'\b(\d{4,8})\b', text)
+    # Then plain 4-8 digit number
+    m = re.search(r'\b(\d{4,8})\b', sms_text)
     return m.group(1) if m else "N/A"
 
+
 def get_flag(country: str) -> str:
-    return COUNTRY_FLAGS.get(country, COUNTRY_FLAGS.get(country.title(), "🏴‍☠️"))
+    flag = COUNTRY_FLAGS.get(country)
+    if flag:
+        return flag
+    # Try title-cased version as fallback
+    flag = COUNTRY_FLAGS.get(country.title())
+    return flag if flag else "🏴‍☠️"
 
-def is_admin(uid) -> bool:
-    return str(uid) in ADMIN_IDS
+
+def is_admin(user_id) -> bool:
+    return str(user_id) in ADMIN_IDS
 
 
-async def _launch_browser() -> None:
-    global _pw, _context
-    log.info("Launching Chromium …")
-    _pw = await async_playwright().start()
-    _context = await _pw.chromium.launch_persistent_context(
-        user_data_dir=os.path.join(DATA_DIR, "chrome_profile"),
+# ─────────────────────────────────────────────────────────────
+#  BROWSER MANAGEMENT
+# ─────────────────────────────────────────────────────────────
+async def launch_browser() -> None:
+    """Start Playwright and open a persistent Chromium browser context."""
+    global _playwright, _browser_ctx
+
+    log.info("Launching Chromium browser …")
+    _playwright = await async_playwright().start()
+    _browser_ctx = await _playwright.chromium.launch_persistent_context(
+        user_data_dir=PROFILE_DIR,
         headless=True,
         args=[
             "--no-sandbox",
@@ -197,7 +312,6 @@ async def _launch_browser() -> None:
             "--disable-blink-features=AutomationControlled",
             "--disable-infobars",
             "--disable-extensions",
-            "--single-process",
         ],
         ignore_https_errors=True,
         java_script_enabled=True,
@@ -211,133 +325,181 @@ async def _launch_browser() -> None:
         locale="en-US",
         timezone_id="America/New_York",
     )
-    await _context.add_init_script("""
+
+    # Inject stealth script to hide automation fingerprints
+    await _browser_ctx.add_init_script("""
         Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-        Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-        Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
+        Object.defineProperty(navigator, 'plugins',   {get: () => [1, 2, 3, 4, 5]});
+        Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
         window.chrome = {runtime: {}};
     """)
     log.info("Browser ready.")
 
 
-async def _close_browser() -> None:
-    global _pw, _context
-    if _context:
+async def close_browser() -> None:
+    """Cleanly close browser and playwright."""
+    global _playwright, _browser_ctx
+    if _browser_ctx:
         try:
-            await _context.close()
+            await _browser_ctx.close()
         except Exception:
             pass
-        _context = None
-    if _pw:
+        _browser_ctx = None
+    if _playwright:
         try:
-            await _pw.stop()
+            await _playwright.stop()
         except Exception:
             pass
-        _pw = None
+        _playwright = None
 
 
+# ─────────────────────────────────────────────────────────────
+#  LOGIN
+# ─────────────────────────────────────────────────────────────
 async def do_login() -> bool:
-    global _csrf, _fail_count, _logged_in
+    """
+    Open a real browser page, navigate to the login form,
+    fill credentials, submit, and confirm we landed on the dashboard.
+    Returns True on success, False on failure.
+    """
+    global _csrf_token, _is_logged_in, _fail_count
 
-    if _context is None:
-        await _launch_browser()
+    # Make sure browser is running
+    if _browser_ctx is None:
+        await launch_browser()
 
     log.info("Logging in to iVAS SMS …")
-    page = await _context.new_page()
+    page = await _browser_ctx.new_page()
 
     try:
-        await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
+        # Go to login page
+        await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60_000)
 
-        # Wait out Cloudflare challenge — up to 30 seconds
-        for i in range(6):
-            if await page.query_selector('input[name="email"]'):
+        # Wait up to 30 s for Cloudflare challenge to pass
+        for attempt in range(6):
+            email_input = await page.query_selector('input[name="email"]')
+            if email_input:
                 break
-            log.info("  CF challenge detected, waiting … (%d/6)", i + 1)
+            log.info("  Cloudflare challenge — waiting 5s … (%d/6)", attempt + 1)
             await asyncio.sleep(5)
-
-        email_field = await page.query_selector('input[name="email"]')
-        if not email_field:
-            log.warning("  Login form not found — Cloudflare blocked us.")
+        else:
+            log.warning("  Login form never appeared — Cloudflare blocked us.")
             _fail_count += 1
-            _logged_in = False
+            _is_logged_in = False
             return False
 
-        # Type like a human
+        # Type credentials with realistic delays so CF bot-score stays low
         await page.fill('input[name="email"]', "")
-        await page.type('input[name="email"]', IVAS_EMAIL, delay=80)
+        await page.type('input[name="email"]', IVAS_EMAIL, delay=70)
         await asyncio.sleep(0.5)
+
         await page.fill('input[name="password"]', "")
-        await page.type('input[name="password"]', IVAS_PASSWORD, delay=60)
+        await page.type('input[name="password"]', IVAS_PASSWORD, delay=55)
         await asyncio.sleep(0.4)
+
+        # Click submit
         await page.click('button[type="submit"]')
 
+        # Wait for redirect away from the login page
         try:
             await page.wait_for_url(
                 lambda url: "login" not in url,
-                timeout=25000,
+                timeout=25_000,
             )
         except Exception:
             body = await page.inner_text("body")
-            if "password" in body.lower() or "invalid" in body.lower():
+            if "invalid" in body.lower() or "credentials" in body.lower():
                 log.error("  Wrong credentials — check IVAS_EMAIL / IVAS_PASSWORD.")
             else:
-                log.warning("  Login redirect timed out.")
+                log.warning("  Redirect never happened after submit.")
             _fail_count += 1
-            _logged_in = False
+            _is_logged_in = False
             return False
 
-        # Grab CSRF from dashboard
+        # Extract CSRF token from dashboard meta tag
         token = await page.evaluate(
-            'document.querySelector(\'meta[name="csrf-token"]\')?.content || ""'
+            'document.querySelector(\'meta[name="csrf-token"]\')?.content ?? ""'
         )
         if token:
-            _csrf = token
+            _csrf_token = token
+            log.info("  Login OK. CSRF: %s…", _csrf_token[:12])
+        else:
+            log.warning("  Logged in but no CSRF token found on dashboard.")
 
-        log.info("  Login successful! CSRF: %s…", _csrf[:12] if _csrf else "none")
-        _fail_count = 0
-        _logged_in = True
+        _fail_count   = 0
+        _is_logged_in = True
         return True
 
-    except Exception as e:
-        log.error("  Login exception: %s", e)
-        _fail_count += 1
-        _logged_in = False
+    except Exception as exc:
+        log.error("  Login exception: %s", exc)
+        _fail_count   += 1
+        _is_logged_in  = False
         return False
+
     finally:
         await page.close()
 
 
-async def _refresh_csrf() -> str:
-    global _csrf
-    if _context is None:
+async def refresh_csrf() -> str:
+    """
+    Navigate to the portal page in a background page to grab
+    a fresh CSRF token without disrupting anything else.
+    Returns the token string (may be empty on failure).
+    """
+    global _csrf_token, _is_logged_in
+
+    if _browser_ctx is None:
         return ""
-    page = await _context.new_page()
+
+    page = await _browser_ctx.new_page()
     try:
-        await page.goto(PORTAL_URL, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(PORTAL_URL, wait_until="domcontentloaded", timeout=30_000)
+
+        # If we got redirected back to login, session has expired
         if "login" in page.url:
-            _csrf = ""
+            log.warning("  Session expired (redirected to login).")
+            _is_logged_in = False
+            _csrf_token   = ""
             return ""
+
         token = await page.evaluate(
-            'document.querySelector(\'meta[name="csrf-token"]\')?.content || ""'
+            'document.querySelector(\'meta[name="csrf-token"]\')?.content ?? ""'
         )
         if token:
-            _csrf = token
-        return _csrf
-    except Exception:
-        return _csrf
+            _csrf_token = token
+
+        return _csrf_token
+
+    except Exception as exc:
+        log.error("  refresh_csrf error: %s", exc)
+        return _csrf_token
+
     finally:
         await page.close()
 
 
+# ─────────────────────────────────────────────────────────────
+#  SMS FETCHING
+# ─────────────────────────────────────────────────────────────
 async def fetch_sms() -> list:
-    global _csrf
+    """
+    Use the browser's authenticated session to POST to the iVAS API
+    and return a list of SMS message dicts.
+    All global variables are declared at the TOP of this function.
+    """
+    global _csrf_token, _is_logged_in
 
-    if _context is None or not _logged_in:
+    # Guard: if not logged in or browser not ready, return empty
+    if not _is_logged_in or _browser_ctx is None:
         return []
 
-    token = _csrf or await _refresh_csrf()
+    # Make sure we have a CSRF token
+    token = _csrf_token
     if not token:
-        log.warning("No CSRF token — session expired, will re-login next cycle.")
+        log.info("  No CSRF token cached — refreshing …")
+        token = await refresh_csrf()
+    if not token:
+        log.warning("  Still no CSRF token — skipping this cycle.")
         return []
 
     today    = datetime.utcnow()
@@ -345,25 +507,21 @@ async def fetch_sms() -> list:
     to_str   = today.strftime("%m/%d/%Y")
 
     try:
-        resp = await _context.request.post(
-            SMS_ENDPOINT,
+        # ── Step 1: Get the list of country/group IDs ──
+        resp = await _browser_ctx.request.post(
+            SMS_URL,
             form={"from": from_str, "to": to_str, "_token": token},
         )
 
+        # Handle session expiry
         if resp.status == 419:
-            log.warning("CSRF expired (419), refreshing …")
-            _csrf = ""
-            await _refresh_csrf()
-            return []
-
-        if resp.status == 302 or "login" in resp.url:
-            log.warning("Session expired — need re-login.")
-            global _logged_in
-            _logged_in = False
+            log.warning("  CSRF expired (419) — refreshing …")
+            _csrf_token = ""
+            await refresh_csrf()
             return []
 
         if not resp.ok:
-            log.warning("SMS endpoint returned %d", resp.status)
+            log.warning("  SMS endpoint returned HTTP %d", resp.status)
             return []
 
         soup       = BeautifulSoup(await resp.text(), "html.parser")
@@ -371,18 +529,27 @@ async def fetch_sms() -> list:
         if not group_divs:
             return []
 
+        # Parse group IDs from onclick attributes
         group_ids = []
         for div in group_divs:
-            m = re.search(r"getDetials\('(.+?)'\)", div.get("onclick", ""))
+            onclick = div.get("onclick", "")
+            m = re.search(r"getDetials\('(.+?)'\)", onclick)
             if m:
                 group_ids.append(m.group(1))
 
         messages = []
+
+        # ── Step 2: For each group, get phone numbers ──
         for gid in group_ids:
             try:
-                num_resp = await _context.request.post(
+                num_resp = await _browser_ctx.request.post(
                     NUMBERS_URL,
-                    form={"start": from_str, "end": to_str, "range": gid, "_token": token},
+                    form={
+                        "start":  from_str,
+                        "end":    to_str,
+                        "range":  gid,
+                        "_token": token,
+                    },
                 )
                 if not num_resp.ok:
                     continue
@@ -390,16 +557,19 @@ async def fetch_sms() -> list:
                 num_soup    = BeautifulSoup(await num_resp.text(), "html.parser")
                 number_divs = num_soup.select("div[onclick*='getDetialsNumber']")
 
+                # ── Step 3: For each number, get SMS messages ──
                 for ndiv in number_divs:
                     phone = ndiv.text.strip()
                     if not phone:
                         continue
 
-                    sms_resp = await _context.request.post(
+                    sms_resp = await _browser_ctx.request.post(
                         SMS_DETAIL,
                         form={
-                            "start": from_str, "end": to_str,
-                            "Number": phone, "Range": gid,
+                            "start":  from_str,
+                            "end":    to_str,
+                            "Number": phone,
+                            "Range":  gid,
                             "_token": token,
                         },
                     )
@@ -413,215 +583,296 @@ async def fetch_sms() -> list:
                         p = card.find("p", class_="mb-0")
                         if not p:
                             continue
+
                         sms_text = p.get_text(separator="\n").strip()
                         if not sms_text:
                             continue
 
+                        # Derive country name from group id
                         m2      = re.match(r"([a-zA-Z\s]+)", gid)
                         country = m2.group(1).strip() if m2 else gid.strip()
+
                         service = detect_service(sms_text)
+                        code    = extract_code(sms_text)
+                        flag    = get_flag(country)
+                        emoji   = SERVICE_EMOJIS.get(service, "❓")
 
                         messages.append({
                             "id":      f"{phone}|{sms_text[:80]}",
                             "time":    datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
                             "number":  phone,
                             "country": country,
-                            "flag":    get_flag(country),
+                            "flag":    flag,
                             "service": service,
-                            "emoji":   SERVICE_EMOJIS.get(service, "❓"),
-                            "code":    extract_code(sms_text),
+                            "emoji":   emoji,
+                            "code":    code,
                             "sms":     sms_text,
                         })
-            except Exception as e:
-                log.error("Error processing group %s: %s", gid, e)
+
+            except Exception as group_err:
+                log.error("  Error in group %s: %s", gid, group_err)
                 continue
 
         return messages
 
-    except Exception as e:
-        log.error("fetch_sms error: %s", e)
+    except Exception as exc:
+        log.error("  fetch_sms error: %s", exc)
+        traceback.print_exc()
         return []
 
 
+# ─────────────────────────────────────────────────────────────
+#  TELEGRAM: SEND OTP MESSAGE
+# ─────────────────────────────────────────────────────────────
 async def send_otp(bot, chat_id: str, msg: dict) -> None:
+    """Send a formatted OTP message to a Telegram chat."""
+
     text = (
         f"🔔 *New OTP Received*\n\n"
-        f"📞 *Number:* `{_esc(msg['number'])}`\n"
-        f"🔑 *Code:* `{_esc(msg['code'])}`\n"
-        f"🏆 *Service:* {msg['emoji']} {_esc(msg['service'])}\n"
-        f"🌎 *Country:* {_esc(msg['country'])} {msg['flag']}\n"
-        f"⏳ *Time:* {_esc(msg['time'])}\n\n"
-        f"💬 *Message:*\n{_esc(msg['sms'])}"
+        f"📞 *Number:* `{escape_md(msg['number'])}`\n"
+        f"🔑 *Code:* `{escape_md(msg['code'])}`\n"
+        f"🏆 *Service:* {msg['emoji']} {escape_md(msg['service'])}\n"
+        f"🌎 *Country:* {escape_md(msg['country'])} {msg['flag']}\n"
+        f"⏳ *Time:* {escape_md(msg['time'])}\n\n"
+        f"💬 *Message:*\n{escape_md(msg['sms'])}"
     )
+
     try:
         await bot.send_message(
-            chat_id=chat_id, text=text,
-            parse_mode="MarkdownV2", reply_markup=BUTTONS,
+            chat_id=chat_id,
+            text=text,
+            parse_mode="MarkdownV2",
+            reply_markup=BUTTONS,
         )
     except RetryAfter as e:
+        # Telegram rate limit — wait and retry once
         await asyncio.sleep(e.retry_after + 1)
-        await bot.send_message(
-            chat_id=chat_id, text=text,
-            parse_mode="MarkdownV2", reply_markup=BUTTONS,
-        )
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="MarkdownV2",
+                reply_markup=BUTTONS,
+            )
+        except Exception:
+            pass
     except Exception:
+        # MarkdownV2 parse error — fall back to plain text
         try:
             plain = (
-                f"New OTP\n\nNumber: {msg['number']}\nCode: {msg['code']}\n"
-                f"Service: {msg['service']}\nCountry: {msg['country']} {msg['flag']}\n"
-                f"Time: {msg['time']}\n\nMessage:\n{msg['sms']}"
+                f"New OTP Received\n\n"
+                f"Number:  {msg['number']}\n"
+                f"Code:    {msg['code']}\n"
+                f"Service: {msg['service']}\n"
+                f"Country: {msg['country']} {msg['flag']}\n"
+                f"Time:    {msg['time']}\n\n"
+                f"Message:\n{msg['sms']}"
             )
-            await bot.send_message(chat_id=chat_id, text=plain, reply_markup=BUTTONS)
-        except Exception as e2:
-            log.error("Send failed for %s: %s", chat_id, e2)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=plain,
+                reply_markup=BUTTONS,
+            )
+        except Exception as fallback_err:
+            log.error("  Could not send to %s: %s", chat_id, fallback_err)
 
 
+# ─────────────────────────────────────────────────────────────
+#  MAIN POLLING LOOP
+# ─────────────────────────────────────────────────────────────
 async def poll_loop(bot) -> None:
-    global _fail_count, _logged_in
+    """
+    The heart of the bot. Runs forever:
+      1. Make sure we are logged in.
+      2. Fetch SMS messages.
+      3. Send any new ones to all registered Telegram chats.
+      4. Sleep, then repeat.
+    """
+    global _fail_count, _is_logged_in
 
-    # Initial login with retries
-    for attempt in range(3):
+    log.info("Starting poll loop …")
+
+    # Initial login — try up to 3 times before giving up temporarily
+    for attempt in range(1, 4):
         if await do_login():
             break
-        wait = 30 * (attempt + 1)
-        log.warning("Login attempt %d failed, retrying in %ds …", attempt + 1, wait)
+        wait = 30 * attempt
+        log.warning("Login attempt %d/3 failed — waiting %ds …", attempt, wait)
         await asyncio.sleep(wait)
     else:
-        log.error("All login attempts failed. Will keep retrying every 5 minutes.")
+        log.error("Could not log in after 3 attempts. Will keep retrying in the loop.")
 
+    # ── Endless polling ──
     while True:
         try:
-            log.info("[%s] Polling …", datetime.utcnow().strftime("%H:%M:%S"))
+            now = datetime.utcnow().strftime("%H:%M:%S")
+            log.info("[%s] Polling SMS …", now)
 
-            if not _logged_in or _fail_count >= 3:
-                log.info("Re-logging in …")
+            # Re-login if needed
+            if not _is_logged_in or _fail_count >= 3:
+                log.info("Session gone — re-logging in …")
                 success = await do_login()
                 if not success:
                     backoff = min(60 * max(_fail_count, 1), 300)
-                    log.warning("Login failed, backing off %ds.", backoff)
+                    log.warning("Re-login failed — backing off %ds.", backoff)
                     await asyncio.sleep(backoff)
                     continue
 
+            # Fetch messages
             messages = await fetch_sms()
 
             if not messages:
-                log.info("  No messages found.")
+                log.info("  No messages found this cycle.")
             else:
                 seen      = load_seen()
                 chats     = load_chats()
                 new_count = 0
-                for msg in reversed(messages):
+
+                for msg in reversed(messages):   # oldest first
                     if msg["id"] in seen:
                         continue
                     new_count += 1
-                    log.info("  → %s | %s | %s", msg["number"], msg["service"], msg["code"])
+                    log.info(
+                        "  → New OTP | %s | %s | code=%s",
+                        msg["number"], msg["service"], msg["code"],
+                    )
                     for cid in chats:
                         await send_otp(bot, cid, msg)
                     mark_seen(msg["id"])
+
                 if new_count:
                     log.info("  Dispatched %d new OTP(s).", new_count)
                 else:
-                    log.info("  All already seen.")
+                    log.info("  All messages already seen.")
 
-        except Exception as e:
-            log.error("poll_loop error: %s", e)
+        except Exception as exc:
+            log.error("poll_loop unhandled error: %s", exc)
             traceback.print_exc()
 
-        await asyncio.sleep(POLL_SECS)
+        # Wait before next cycle
+        await asyncio.sleep(POLL_INTERVAL)
 
 
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ─────────────────────────────────────────────────────────────
+#  TELEGRAM COMMAND HANDLERS
+# ─────────────────────────────────────────────────────────────
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid = update.message.from_user.id
     if is_admin(uid):
         await update.message.reply_text(
             "Welcome Admin\\!\n\n"
             "`/add_chat <id>` — Add a chat ID\n"
             "`/remove_chat <id>` — Remove a chat ID\n"
-            "`/list_chats` — List all chats\n"
+            "`/list_chats` — Show all chats\n"
             "`/status` — Live bot status",
             parse_mode="MarkdownV2",
             reply_markup=BUTTONS,
         )
     else:
         await update.message.reply_text(
-            "Not authorized\\.", parse_mode="MarkdownV2", reply_markup=BUTTONS
+            "You are not authorized to use this bot\\.",
+            parse_mode="MarkdownV2",
+            reply_markup=BUTTONS,
         )
 
-async def add_chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def cmd_add_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update.message.from_user.id):
         return await update.message.reply_text("Admins only.")
     if not context.args:
-        return await update.message.reply_text("Usage: /add\\_chat \\<id\\>", parse_mode="MarkdownV2")
+        return await update.message.reply_text("Usage: /add\\_chat \\<chat\\_id\\>", parse_mode="MarkdownV2")
+
     cid   = context.args[0]
     chats = load_chats()
     if cid in chats:
-        return await update.message.reply_text(f"Already registered\\.", parse_mode="MarkdownV2")
+        return await update.message.reply_text(
+            f"`{escape_md(cid)}` is already registered\\.", parse_mode="MarkdownV2"
+        )
     chats.append(cid)
     save_chats(chats)
-    await update.message.reply_text(f"✅ Added `{_esc(cid)}`\\.", parse_mode="MarkdownV2")
+    await update.message.reply_text(f"✅ Added `{escape_md(cid)}`\\.", parse_mode="MarkdownV2")
 
-async def remove_chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def cmd_remove_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update.message.from_user.id):
         return await update.message.reply_text("Admins only.")
     if not context.args:
-        return await update.message.reply_text("Usage: /remove\\_chat \\<id\\>", parse_mode="MarkdownV2")
+        return await update.message.reply_text("Usage: /remove\\_chat \\<chat\\_id\\>", parse_mode="MarkdownV2")
+
     cid   = context.args[0]
     chats = load_chats()
     if cid not in chats:
-        return await update.message.reply_text(f"Not found\\.", parse_mode="MarkdownV2")
+        return await update.message.reply_text(
+            f"`{escape_md(cid)}` not found\\.", parse_mode="MarkdownV2"
+        )
     chats.remove(cid)
     save_chats(chats)
-    await update.message.reply_text(f"✅ Removed `{_esc(cid)}`\\.", parse_mode="MarkdownV2")
+    await update.message.reply_text(f"✅ Removed `{escape_md(cid)}`\\.", parse_mode="MarkdownV2")
 
-async def list_chats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def cmd_list_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update.message.from_user.id):
         return await update.message.reply_text("Admins only.")
     chats = load_chats()
     if not chats:
-        return await update.message.reply_text("No chats registered.")
-    lines = "\n".join(f"• `{_esc(c)}`" for c in chats)
+        return await update.message.reply_text("No chats registered yet.")
+    lines = "\n".join(f"• `{escape_md(c)}`" for c in chats)
     await update.message.reply_text(
         f"📜 *Registered Chats:*\n\n{lines}", parse_mode="MarkdownV2"
     )
 
-async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update.message.from_user.id):
         return
-    chats = load_chats()
-    seen  = load_seen()
+
+    browser = "✅ Running" if _browser_ctx else "❌ Down"
+    session = "✅ Active"  if _is_logged_in else "❌ Logged out"
+    csrf    = "✅ Present" if _csrf_token   else "❌ Missing"
+
     await update.message.reply_text(
         f"*Bot Status*\n\n"
-        f"Browser: {'✅' if _context else '❌'}\n"
-        f"Logged in: {'✅' if _logged_in else '❌'}\n"
-        f"CSRF: {'✅' if _csrf else '❌'}\n"
-        f"Fail count: {_fail_count}\n"
-        f"Chats: {len(chats)}\n"
-        f"Seen IDs: {len(seen)}\n"
-        f"Email: `{_esc(IVAS_EMAIL)}`",
+        f"Browser: {browser}\n"
+        f"Session: {session}\n"
+        f"CSRF:    {csrf}\n"
+        f"Fails:   {_fail_count}\n"
+        f"Chats:   {len(load_chats())}\n"
+        f"Seen:    {len(load_seen())} IDs\n\n"
+        f"Email: `{escape_md(IVAS_EMAIL)}`",
         parse_mode="MarkdownV2",
     )
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+
+# ─────────────────────────────────────────────────────────────
+#  TELEGRAM ERROR HANDLER
+# ─────────────────────────────────────────────────────────────
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     err = context.error
     if isinstance(err, Conflict):
-        log.warning("Telegram Conflict — old instance still alive, waiting 30s …")
+        # Two instances of the bot running simultaneously (Railway rolling deploy)
+        log.warning("Telegram Conflict — waiting 30s for old instance to die …")
         await asyncio.sleep(30)
     elif isinstance(err, (TimedOut, NetworkError)):
-        log.warning("Telegram network hiccup: %s", err)
+        log.warning("Telegram network error (will auto-recover): %s", err)
     else:
-        log.error("Telegram error: %s", err)
+        log.error("Unhandled Telegram error: %s", err)
 
 
-async def _main():
-    log.info("=" * 50)
-    log.info("iVAS SMS Bot starting …")
+# ─────────────────────────────────────────────────────────────
+#  ENTRY POINT
+# ─────────────────────────────────────────────────────────────
+async def main() -> None:
+    log.info("=" * 55)
+    log.info("iVAS SMS → Telegram Bot")
     log.info("Email : %s", IVAS_EMAIL)
     log.info("Admin : %s", ADMIN_IDS)
     log.info("Chats : %s", load_chats())
-    log.info("=" * 50)
+    log.info("=" * 55)
 
-    await _launch_browser()
+    # Start the browser
+    await launch_browser()
 
+    # Build the Telegram application
     app = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -632,27 +883,29 @@ async def _main():
         .build()
     )
 
-    app.add_handler(CommandHandler("start",       start_cmd))
-    app.add_handler(CommandHandler("add_chat",    add_chat_cmd))
-    app.add_handler(CommandHandler("remove_chat", remove_chat_cmd))
-    app.add_handler(CommandHandler("list_chats",  list_chats_cmd))
-    app.add_handler(CommandHandler("status",      status_cmd))
+    # Register commands
+    app.add_handler(CommandHandler("start",       cmd_start))
+    app.add_handler(CommandHandler("add_chat",    cmd_add_chat))
+    app.add_handler(CommandHandler("remove_chat", cmd_remove_chat))
+    app.add_handler(CommandHandler("list_chats",  cmd_list_chats))
+    app.add_handler(CommandHandler("status",      cmd_status))
     app.add_error_handler(error_handler)
 
+    # Run everything
     async with app:
         await app.start()
         await app.updater.start_polling(
             drop_pending_updates=True,
             allowed_updates=["message"],
         )
-        log.info("Bot online. Polling SMS every %ds.", POLL_SECS)
+        log.info("Bot is live. Polling SMS every %ds.", POLL_INTERVAL)
         try:
             await poll_loop(app.bot)
         finally:
             await app.updater.stop()
             await app.stop()
-            await _close_browser()
+            await close_browser()
 
 
 if __name__ == "__main__":
-    asyncio.run(_main())
+    asyncio.run(main())
