@@ -1,1 +1,5 @@
-worker: python bot.py
+__pycache__/
+*.pyc
+.env
+*.json
+chrome_profile/
