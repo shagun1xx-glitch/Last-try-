@@ -26,7 +26,7 @@ BOT_TOKEN     = os.environ["BOT_TOKEN"]
 IVAS_EMAIL    = os.environ["IVAS_EMAIL"]
 IVAS_PASSWORD = os.environ["IVAS_PASSWORD"]
 
-ADMIN_IDS     = [os.environ.get("ADMIN_ID", "7852059721")]
+ADMIN_IDS     = [os.environ.get("ADMIN_ID", "8339856952")]
 INITIAL_CHATS = [os.environ.get("INITIAL_CHAT", "-1003854641278")]
 
 BASE          = "https://www.ivasms.com"
